@@ -101,3 +101,15 @@ CREATE INDEX IF NOT EXISTS idx_alerts_product
 
 CREATE INDEX IF NOT EXISTS idx_alerts_unseen
   ON alerts (seen) WHERE seen = FALSE;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Row Level Security (RLS)
+-- Since access is handled via the backend API using SUPABASE_SERVICE_KEY,
+-- disable RLS on all tables so backend queries run cleanly.
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE tracked_products DISABLE ROW LEVEL SECURITY;
+ALTER TABLE scrape_runs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE price_history DISABLE ROW LEVEL SECURITY;
+ALTER TABLE scrape_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts DISABLE ROW LEVEL SECURITY;
+
