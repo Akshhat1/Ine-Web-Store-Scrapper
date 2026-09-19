@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Google Font: Inter ─────────────────────────────────────────────────────── */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-gray-950 text-gray-100 min-h-screen;
+    background-image: radial-gradient(ellipse at top, rgba(92, 106, 247, 0.08) 0%, transparent 60%);
+  }
+}
+
+/* ── Custom scrollbar ───────────────────────────────────────────────────────── */
+@layer utilities {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-700 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-500;
+  }
+}
+
+/* ── Glassmorphism card ─────────────────────────────────────────────────────── */
+@layer components {
+  .glass-card {
+    @apply bg-gray-900/60 backdrop-blur-sm border border-gray-800/60 rounded-2xl;
+  }
+  .glass-card-hover {
+    @apply glass-card transition-all duration-300 hover:bg-gray-800/60 hover:border-gray-700/60 hover:shadow-xl hover:shadow-brand-500/5;
+  }
+  .gradient-text {
+    @apply bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent;
+  }
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .badge-success {
+    @apply status-badge bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30;
+  }
+  .badge-warning {
+    @apply status-badge bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30;
+  }
+  .badge-error {
+    @apply status-badge bg-red-500/15 text-red-400 ring-1 ring-red-500/30;
+  }
+  .badge-info {
+    @apply status-badge bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30;
+  }
+  .badge-neutral {
+    @apply status-badge bg-gray-500/15 text-gray-400 ring-1 ring-gray-500/30;
+  }
+  .btn-primary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 text-sm transition-all duration-200 disabled:opacity-50;
+  }
+  .stock-in {
+    @apply badge-success;
+  }
+  .stock-out {
+    @apply badge-error;
+  }
+  .stock-low {
+    @apply badge-warning;
+  }
+  .stock-unknown {
+    @apply badge-neutral;
+  }
+}
+
+/* ── Recharts override for dark theme ───────────────────────────────────────── */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(75, 85, 99, 0.3) !important;
+}
+.recharts-text {
+  fill: rgb(156, 163, 175) !important;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: rgb(17, 24, 39) !important;
+  border: 1px solid rgba(75, 85, 99, 0.5) !important;
+  border-radius: 12px !important;
+}
+
+/* ── Loading shimmer ─────────────────────────────────────────────────────────── */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.03) 25%,
+    rgba(255,255,255,0.07) 37%,
+    rgba(255,255,255,0.03) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "ine-price-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "test": "cd backend && npm test",
+    "typecheck": "cd backend && npm run typecheck && cd ../frontend && npm run typecheck",
+    "scrape:headed": "cd backend && node --loader ts-node/esm ../scripts/runHeaded.ts"
+  }
+}
