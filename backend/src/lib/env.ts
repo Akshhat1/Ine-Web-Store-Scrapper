@@ -12,7 +12,7 @@ const envSchema = z.object({
     .url()
     .default("https://demo.inelabteamdev.com"),
   CRON_SECRET: z.string().min(8),
-  FRONTEND_ORIGIN: z.string().default("http://localhost:5173"),
+  FRONTEND_ORIGIN: z.string().default("*"),
   ENABLE_BROWSER: z
     .string()
     .transform((v) => v === "true" || v === "1")

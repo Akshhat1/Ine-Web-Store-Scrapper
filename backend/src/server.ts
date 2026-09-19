@@ -22,7 +22,7 @@ const app = express();
 app.use(helmet());
 app.use(
   cors({
-    origin: env.FRONTEND_ORIGIN,
+    origin: env.FRONTEND_ORIGIN === "*" ? true : [env.FRONTEND_ORIGIN, "http://localhost:5173"],
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
