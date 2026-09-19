@@ -18,8 +18,11 @@ const env = getEnv();
 
 const app = express();
 
+const helmetFn = (typeof helmet === "function" ? helmet : (helmet as any).default) as typeof helmet;
+const rateLimitFn = (typeof rateLimit === "function" ? rateLimit : (rateLimit as any).default) as typeof rateLimit;
+
 // ── Security middleware ────────────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmetFn());
 app.use(
   cors({
     origin: env.FRONTEND_ORIGIN === "*" ? true : [env.FRONTEND_ORIGIN, "http://localhost:5173"],
@@ -30,7 +33,7 @@ app.use(
 app.use(express.json());
 
 // ── Rate limiting (public routes only) ───────────────────────────────────────
-const limiter = rateLimit({
+const limiter = rateLimitFn({
   windowMs: 60 * 1000,     // 1 minute window
   max: 60,                  // 60 requests per minute per IP
   standardHeaders: true,
