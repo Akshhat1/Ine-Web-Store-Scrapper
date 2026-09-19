@@ -18,8 +18,8 @@ const env = getEnv();
 
 const app = express();
 
-const helmetFn = (typeof helmet === "function" ? helmet : (helmet as any).default) as typeof helmet;
-const rateLimitFn = (typeof rateLimit === "function" ? rateLimit : (rateLimit as any).default) as typeof rateLimit;
+const helmetFn: any = helmet;
+const rateLimitFn: any = rateLimit;
 
 // ── Security middleware ────────────────────────────────────────────────────────
 app.use(helmetFn());
