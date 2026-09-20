@@ -10,21 +10,13 @@ export type StockStatus = "in_stock" | "out_of_stock" | "low_stock" | "unknown";
 
 /**
  * Normalize a raw stock string (from DOM text, badge, etc.) to our enum.
+ * Handles INE demo store patterns: "In stock · N left", "Only N left", "Out of stock".
  * When ambiguous, returns 'unknown' — we never guess.
  */
 export function normalizeStock(raw: string | null | undefined): StockStatus {
   if (!raw) return "unknown";
 
   const s = raw.trim().toLowerCase();
-
-  if (
-    s.includes("in stock") ||
-    s.includes("instock") ||
-    s === "available" ||
-    s === "in-stock"
-  ) {
-    return "in_stock";
-  }
 
   if (
     s.includes("out of stock") ||
@@ -36,14 +28,27 @@ export function normalizeStock(raw: string | null | undefined): StockStatus {
     return "out_of_stock";
   }
 
+  // Low stock patterns (check before in_stock since "in stock · N left" contains "in stock")
   if (
     s.includes("low stock") ||
     s.includes("limited stock") ||
-    s.includes("only") ||
-    s.includes("few left") ||
-    s.includes("hurry")
+    s.includes("selling fast") ||
+    s.includes("hurry") ||
+    // "Only N left", "N in stock", "In stock · N left"
+    /\bonly\s+\d/.test(s) ||
+    /\d+\s+(left|in stock)/.test(s) ||
+    /in\s+stock\s+·/.test(s)
   ) {
     return "low_stock";
+  }
+
+  if (
+    s.includes("in stock") ||
+    s.includes("instock") ||
+    s === "available" ||
+    s === "in-stock"
+  ) {
+    return "in_stock";
   }
 
   return "unknown";

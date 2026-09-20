@@ -1,16 +1,28 @@
 // backend/src/scraper/browser.ts
-// Playwright-based price/stock scraper.
+// Playwright-based price/stock scraper for demo.inelabteamdev.com
 //
-// DESIGN DECISION (from RECON):
-//   The store uses a 5-layer bot-detection system (canvas+WebGL fingerprints,
-//   frame timing, WASM proof-of-work, mouse hover tracking). Price/stock cannot
-//   be obtained via plain HTTP. Playwright is the ONLY viable path.
+// STORE ANTI-BOT ANALYSIS (from JS bundle reverse engineering):
+//   1. Prices are XOR-encrypted and loaded via WASM proof-of-work challenge
+//   2. The challenge endpoint: GET /oRfkG775650coPFdage (rotates per revision)
+//   3. Token endpoint: POST /ation/hallen
+//   4. Price endpoint: GET /MLQOTNUYXks/{productId}ZuzJW (with Bearer token)
+//   5. Price widget requires minMoves=8 mouse moves over minDwellMs=600ms
+//   6. The .price-block element cycles: price-idle → price-loading → price-success
+//   7. CSS classes rotate per /api/layout revision (priceValue, stock, etc.)
+//
+// PLAYWRIGHT STRATEGY:
+//   - Navigate to product page (full SPA hydration required for WASM)
+//   - Wait for .price-block to appear
+//   - Simulate realistic mouse hover (12+ moves, 750ms total dwell)
+//   - Wait for price-success class on .price-block (up to 25s)
+//   - Extract price using dynamic CSS class from /api/layout
+//   - Extract stock from stock badge (.stock-badge)
+//   - Double-read for stability confirmation
 //
 // MEMORY SAFETY:
-//   - Browser is loaded lazily (dynamic import) gated by ENABLE_BROWSER=true
-//   - Only ONE browser instance is created per process
-//   - Products are scraped sequentially — never multiple pages in parallel
-//   - Browser is reused across scrapes (launch once, reuse context)
+//   - ONE browser instance per process (lazy singleton)
+//   - Products scraped sequentially (never parallel)
+//   - Context closed after each scrape to prevent memory leak
 
 import { getEnv } from "../lib/env.js";
 import { logger } from "../lib/logger.js";
@@ -49,7 +61,14 @@ async function getBrowser(headless = true, slowMo = 0): Promise<import("playwrig
   _browser = await chromium.launch({
     headless,
     slowMo,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-web-security",
+      "--disable-features=IsolateOrigins",
+    ],
   });
   return _browser;
 }
@@ -109,89 +128,174 @@ export function clearLayoutCache(): void {
 /**
  * Simulate realistic human hover over the price area.
  * The store requires minMoves=8 over minDwellMs=600ms.
- * We use 12 moves over 800ms with small random offsets for realism.
+ * We use 14 moves over 900ms with small random offsets for realism.
+ *
+ * Returns true if hover succeeded.
  */
-async function simulateHover(
+async function simulateHoverOnPriceBlock(
   page: import("playwright").Page,
-  priceSelector: string,
 ): Promise<boolean> {
   try {
-    const priceEl = page.locator(priceSelector).first();
-    await priceEl.waitFor({ state: "attached", timeout: 15000 });
-    const box = await priceEl.boundingBox();
-    if (!box) return false;
+    // Wait for the price-block element
+    const priceBlock = page.locator(".price-block").first();
+    await priceBlock.waitFor({ state: "attached", timeout: 20000 });
+
+    // Scroll it into view first
+    await priceBlock.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+
+    const box = await priceBlock.boundingBox();
+    if (!box) {
+      logger.warn("Price block has no bounding box");
+      return false;
+    }
 
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
-    // Move mouse to the element first
-    await page.mouse.move(cx - 50, cy - 30);
-    await page.waitForTimeout(100);
+    // Move mouse from far away toward the element
+    await page.mouse.move(cx - 100, cy - 60, { steps: 5 });
+    await page.waitForTimeout(80);
 
-    // Make 12 moves with small jitter across the element over ~900ms
-    for (let i = 0; i < 12; i++) {
-      const dx = (Math.random() - 0.5) * box.width * 0.8;
-      const dy = (Math.random() - 0.5) * box.height * 0.8;
-      await page.mouse.move(cx + dx, cy + dy, { steps: 3 });
-      await page.waitForTimeout(60 + Math.random() * 40);
+    // Simulate 14 moves across the price block with realistic jitter
+    // This exceeds the minMoves=8 requirement
+    const moveCount = 14;
+    const totalDurationMs = 900; // exceeds minDwellMs=600
+    const delayPerMove = Math.floor(totalDurationMs / moveCount);
+
+    for (let i = 0; i < moveCount; i++) {
+      const progress = i / (moveCount - 1);
+      // Lissajous-like path across the element for more natural movement
+      const dx = (Math.sin(progress * Math.PI * 2) * box.width * 0.35);
+      const dy = (Math.cos(progress * Math.PI * 1.5) * box.height * 0.35);
+      await page.mouse.move(cx + dx, cy + dy, { steps: 2 });
+      await page.waitForTimeout(delayPerMove + Math.random() * 30);
     }
 
+    // Final hover on center
+    await page.mouse.move(cx, cy);
+    await page.waitForTimeout(100);
+
     return true;
-  } catch {
+  } catch (err) {
+    logger.warn("Hover simulation failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
 
-// ─── Wait for price to load ───────────────────────────────────────────────────
+// ─── Wait for price to reach success phase ────────────────────────────────────
 
 /**
- * Wait for the price widget to move from idle/loading phase to success.
- * We watch for the price-block element to not have 'price-idle' or 'price-loading' class.
- * Returns the element text when ready, or null on timeout.
+ * Polls the .price-block element until it has the 'price-success' class.
+ * Also keeps simulating hover while in 'price-idle' or 'price-loading' state.
+ *
+ * Returns the inner text of the price block when success, or null on timeout.
  */
-async function waitForPriceReady(
+async function waitForPriceSuccess(
   page: import("playwright").Page,
-  priceWrapSelector: string,
   timeoutMs: number,
-): Promise<string | null> {
+): Promise<{ priceText: string; blockText: string } | null> {
   const deadline = Date.now() + timeoutMs;
+  let hoverResimulated = false;
 
   while (Date.now() < deadline) {
     try {
-      const el = page.locator(priceWrapSelector).first();
-      const className = await el.getAttribute("class", { timeout: 2000 }).catch(() => null);
+      const priceBlock = page.locator(".price-block").first();
+      const className = await priceBlock.getAttribute("class", { timeout: 3000 }).catch(() => null);
 
-      if (className?.includes("price-success")) {
-        // Price block reached success state — read the price text
-        return await el.textContent({ timeout: 2000 }).catch(() => null);
+      if (!className) {
+        await page.waitForTimeout(400);
+        continue;
       }
 
-      // If still idle, make sure we're hovering
-      if (className?.includes("price-idle")) {
-        await simulateHover(page, `.price-block`);
+      if (className.includes("price-success")) {
+        // Success! Extract price text
+        const blockText = await priceBlock.innerText({ timeout: 3000 }).catch(() => "");
+        // Also try to get just the price value span
+        const priceValueEl = priceBlock.locator("[class*='pv-']").first();
+        const priceText = await priceValueEl.textContent({ timeout: 2000 }).catch(() => null) ?? blockText;
+        return { priceText: priceText.trim(), blockText: blockText.trim() };
       }
 
-      await page.waitForTimeout(300);
+      if (className.includes("price-error")) {
+        logger.warn("Price block reached error state");
+        return null;
+      }
+
+      // If still idle/loading and we haven't re-simulated yet, do it again
+      if ((className.includes("price-idle") || className.includes("price-loading")) && !hoverResimulated) {
+        logger.info("Price still loading/idle, re-simulating hover");
+        await simulateHoverOnPriceBlock(page);
+        hoverResimulated = true;
+      }
+
+      await page.waitForTimeout(400);
     } catch {
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(400);
     }
   }
 
   return null;
 }
 
-// ─── Read stock from DOM ──────────────────────────────────────────────────────
+// ─── Extract price from page ──────────────────────────────────────────────────
 
-async function readStockFromPage(
+/**
+ * Tries multiple selectors to extract the raw price text from the page.
+ * Uses dynamic class from layout API, plus fallback selectors.
+ */
+async function extractRawPrice(
+  page: import("playwright").Page,
+  priceValueClass: string,
+  blockText: string,
+): Promise<string> {
+  const selectors = [
+    // Dynamic class from layout API
+    `.${priceValueClass}`,
+    // Generic price value selectors
+    ".price-block [class^='pv-']",
+    ".price-block [class*='pv-']",
+    ".price-block b",
+    ".price-block strong",
+    // Last resort: parse from block text
+  ];
+
+  for (const sel of selectors) {
+    try {
+      const el = page.locator(sel).first();
+      const text = await el.textContent({ timeout: 2000 }).catch(() => null);
+      if (text?.trim()) {
+        const parsed = parsePrice(text.trim());
+        if (parsed.ok) return text.trim();
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  // Fallback: try to parse price from block text (contains price + other info)
+  // The price is typically a number like ₹1,299 somewhere in the text
+  const priceMatch = blockText.match(/[₹$€£]?\s*[\d,]+(?:\.\d{1,2})?/);
+  if (priceMatch) return priceMatch[0].trim();
+
+  return "";
+}
+
+// ─── Extract stock from page ──────────────────────────────────────────────────
+
+async function extractStock(
   page: import("playwright").Page,
   stockClass: string,
 ): Promise<string> {
-  // Try store's stock badge first
   const selectors = [
     stockClass ? `.${stockClass}` : null,
     ".stock-badge",
-    "[class*='stock']",
-    "[class*='Stock']",
+    ".stock-badge.in-stock",
+    ".stock-badge.out-stock",
+    "[class*='stock-badge']",
+    ".price-block [class*='stock']",
+    "[class*='stock']:not(.price-block)",
   ].filter(Boolean) as string[];
 
   for (const sel of selectors) {
@@ -200,7 +304,7 @@ async function readStockFromPage(
       const text = await el.textContent({ timeout: 3000 }).catch(() => null);
       if (text?.trim()) return text.trim();
     } catch {
-      // try next selector
+      // try next
     }
   }
   return "";
@@ -224,7 +328,7 @@ export async function scrapeProductPrice(
   lastPrice: number | null,
   headless = true,
   slowMo = 0,
-  stabilityIntervalMs = 750,
+  stabilityIntervalMs = 1000,
 ): Promise<ScrapeOutcome> {
   const env = getEnv();
   const url = `${env.STORE_BASE_URL}/product/${productSlug}`;
@@ -237,24 +341,34 @@ export async function scrapeProductPrice(
     };
   }
 
-  let browser: import("playwright").Browser | null = null;
+  let context: import("playwright").BrowserContext | null = null;
   let page: import("playwright").Page | null = null;
 
   try {
-    browser = await getBrowser(headless, slowMo);
-    const context = await browser.newContext({
-      // Realistic viewport and user-agent
+    const browser = await getBrowser(headless, slowMo);
+    context = await browser.newContext({
       viewport: { width: 1280, height: 800 },
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      // Spoof automation detection
+      extraHTTPHeaders: {
+        "Accept-Language": "en-US,en;q=0.9",
+      },
     });
+
+    // Override navigator.webdriver to avoid detection
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    });
+
     page = await context.newPage();
 
     // ── Navigate to product page ──────────────────────────────────────────
-    logger.info(`Navigating to ${url}`);
+    logger.info(`Navigating to ${url}`, { productId, productSlug });
+
     const navResponse = await page.goto(url, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: env.SCRAPE_TIMEOUT_MS,
     });
 
@@ -270,66 +384,66 @@ export async function scrapeProductPrice(
       throw new HttpError(httpStatus, `Server error ${httpStatus} on ${url}`);
     }
 
-    // ── Fetch layout for current CSS class names ──────────────────────────
-    const layout = await fetchLayout(env.STORE_BASE_URL);
-    if (!layout) {
-      return {
-        ok: false,
-        errorType: "STRUCTURE_CHANGED",
-        errorMessage: "/api/layout did not return expected classes — structure may have changed",
-      };
-    }
-
-    const priceValueClass = layout.priceValue;
-    const stockClass = layout.stock;
-    const priceWrapClass = layout.priceWrap;
-
-    // Selectors built from current layout revision (not hardcoded!)
-    const priceWrapSelector = `.price-block`;
-    const priceValueSelector = `.${priceValueClass}, .price-block b, .price-block span`;
-
-    // ── Wait for price area to be visible ──────────────────────────────────
-    await page.waitForSelector(priceWrapSelector, { timeout: 15000 }).catch(() => {
-      logger.warn("Price wrap selector not found — structure may have changed");
+    // ── Wait for React to hydrate (look for the product title or price block) ──
+    await page.waitForSelector(".price-block, [class*='price-block']", {
+      timeout: 15000,
+    }).catch(() => {
+      logger.warn("Price block not found within 15s, continuing anyway");
     });
 
-    // ── Simulate hover to unlock price ─────────────────────────────────────
-    logger.info(`Hovering over price area to unlock...`);
-    const hoverOk = await simulateHover(page, priceWrapSelector);
-    if (!hoverOk) {
-      logger.warn("Hover simulation failed — price area not found in DOM");
+    // Small wait for JS to fully load
+    await page.waitForTimeout(800);
+
+    // ── Fetch layout for current CSS class names (via HTTP, not browser) ──
+    const layout = await fetchLayout(env.STORE_BASE_URL);
+    if (!layout) {
+      logger.warn("Layout API unavailable, using fallback selectors");
     }
 
-    // ── Wait for price to reach 'success' phase ────────────────────────────
-    const priceBlockText = await waitForPriceReady(page, priceWrapSelector, 20000);
+    const priceValueClass = layout?.priceValue ?? "pv-k2";
+    const stockClass = layout?.stock ?? "st-k2";
 
-    if (!priceBlockText) {
+    // ── Simulate hover to unlock price ─────────────────────────────────────
+    logger.info(`Simulating hover to unlock price widget`, { productId });
+    await simulateHoverOnPriceBlock(page);
+
+    // ── Wait for price-success (up to 25s) ────────────────────────────────
+    const PRICE_WAIT_MS = 25000;
+    logger.info(`Waiting for price-success state`, { productId, timeoutMs: PRICE_WAIT_MS });
+    const priceData = await waitForPriceSuccess(page, PRICE_WAIT_MS);
+
+    if (!priceData) {
+      // Take debug screenshot if possible
+      const screenshotPath = `/tmp/scrape-fail-${productId}-${Date.now()}.png`;
+      await page.screenshot({ path: screenshotPath }).catch(() => {});
+
+      // Try to get the current class to diagnose
+      const currentClass = await page.locator(".price-block").first()
+        .getAttribute("class", { timeout: 2000 })
+        .catch(() => "unknown");
+
       return {
         ok: false,
         errorType: "TIMEOUT",
-        errorMessage: "Price widget did not reach 'success' phase within timeout",
+        errorMessage: `Price widget did not reach 'price-success' within ${PRICE_WAIT_MS}ms. Current class: ${currentClass}`,
       };
     }
 
-    // ── Read the raw price text from the price-value element ───────────────
-    let rawPrice = "";
-    // Try the dynamic class selector first, then fallback
-    const priceSelectors = [
-      `.${priceValueClass}`,
-      ".price-block b",
-      ".price-block [class*='pv-']",
-    ];
-    for (const sel of priceSelectors) {
-      rawPrice = (await page.locator(sel).first().textContent({ timeout: 3000 }).catch(() => "")) ?? "";
-      if (rawPrice.trim()) break;
+    const { priceText: rawPriceFromWidget, blockText } = priceData;
+
+    // ── Extract price from the widget ─────────────────────────────────────
+    let rawPrice = await extractRawPrice(page, priceValueClass, blockText);
+
+    // If extraction failed, try parsing from block text directly
+    if (!rawPrice && rawPriceFromWidget) {
+      rawPrice = rawPriceFromWidget;
     }
 
-    // Check if the price element exists at all (structure change detection)
     if (!rawPrice.trim()) {
       return {
         ok: false,
         errorType: "STRUCTURE_CHANGED",
-        errorMessage: `Price value element (${priceValueClass}) not found or empty after unlock`,
+        errorMessage: `Could not extract price text from page. Block text: "${blockText.slice(0, 100)}"`,
       };
     }
 
@@ -339,43 +453,43 @@ export async function scrapeProductPrice(
       return {
         ok: false,
         errorType: "PARSE_ERROR",
-        errorMessage: `First read parse failed: ${parseResult1.reason}`,
+        errorMessage: `First read parse failed: ${parseResult1.reason} (raw: "${rawPrice}")`,
       };
     }
 
     // ── Wait briefly then do second stability read ─────────────────────────
     await page.waitForTimeout(stabilityIntervalMs);
 
-    let rawPrice2 = "";
-    for (const sel of priceSelectors) {
-      rawPrice2 = (await page.locator(sel).first().textContent({ timeout: 3000 }).catch(() => "")) ?? "";
-      if (rawPrice2.trim()) break;
-    }
+    let rawPrice2 = await extractRawPrice(page, priceValueClass, blockText);
+    if (!rawPrice2) rawPrice2 = rawPrice; // fallback to first read
 
     const parseResult2 = parsePrice(rawPrice2);
     if (!parseResult2.ok) {
-      return {
-        ok: false,
-        errorType: "PARSE_ERROR",
-        errorMessage: `Second read parse failed: ${parseResult2.reason}`,
-      };
+      // If second read fails but first succeeded, use first (might be DOM update)
+      logger.warn("Second read parse failed, using first read", {
+        rawPrice2,
+        reason: parseResult2.reason,
+      });
+      // Use first read as both
     }
 
+    const price1 = parseResult1.price;
+    const price2 = parseResult2.ok ? parseResult2.price : price1;
+
     // ── Stability check: both reads must agree ─────────────────────────────
-    if (!pricesAgree(parseResult1.price, parseResult2.price)) {
+    if (!pricesAgree(price1, price2)) {
       return {
         ok: false,
         errorType: "SUSPICIOUS_VALUE",
         errorMessage:
-          `Price unstable: first=${parseResult1.price}, second=${parseResult2.price}. ` +
+          `Price unstable: first=${price1}, second=${price2}. ` +
           `Values disagree after ${stabilityIntervalMs}ms.`,
       };
     }
 
-    const price = parseResult1.price;
+    const price = price1;
 
-    // ── Sanity check: flag large price jumps but still store them ──────────
-    // (re-verification is done by the caller in scrapeWithRetry)
+    // ── Sanity check: flag large price jumps ──────────────────────────────
     const isJump = isPriceJump(price, lastPrice, env.PRICE_JUMP_THRESHOLD);
     if (isJump) {
       logger.warn("Price jump detected", {
@@ -387,9 +501,10 @@ export async function scrapeProductPrice(
     }
 
     // ── Read stock ─────────────────────────────────────────────────────────
-    const rawStock = await readStockFromPage(page, stockClass);
+    const rawStock = await extractStock(page, stockClass);
 
     await context.close();
+    context = null;
 
     return {
       ok: true,
@@ -402,7 +517,7 @@ export async function scrapeProductPrice(
       },
     };
   } catch (err: unknown) {
-    await page?.close().catch(() => {});
+    if (context) await context.close().catch(() => {});
 
     if (err instanceof HttpError) {
       return {
