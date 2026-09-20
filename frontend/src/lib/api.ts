@@ -127,4 +127,5 @@ export const api = {
   getRuns: () => get<{ runs: ScrapeRun[] }>('/api/runs'),
   getAlerts: () => get<{ alerts: Alert[] }>('/api/alerts'),
   markAlertsSeen: (ids: number[]) => post<{ success: boolean }>('/api/alerts/mark-seen', { ids }),
+  triggerScrapeAll: () => post<{ message: string; runId: string }>('/api/cron/scrape-all'),
 };
