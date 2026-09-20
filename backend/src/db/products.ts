@@ -62,17 +62,18 @@ export async function listProducts(): Promise<TrackedProduct[]> {
   return (data ?? []) as TrackedProduct[];
 }
 
-/** Get one tracked product by our internal UUID. */
+/** Get one tracked product by UUID or store_product_id. */
 export async function getProduct(id: string): Promise<TrackedProduct | null> {
   const db = getSupabase();
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  const column = isUuid ? "id" : "store_product_id";
   const { data, error } = await db
     .from("tracked_products")
     .select("*")
-    .eq("id", id)
-    .single();
+    .eq(column, id)
+    .maybeSingle();
 
-  if (error?.code === "PGRST116") return null; // not found
-  if (error) throw new Error(`DB getProduct: ${error.message}`);
+  if (error) return null;
   return data as TrackedProduct;
 }
 

@@ -97,9 +97,13 @@ export function Dashboard() {
           ))}
         </div>
       ) : error && !serverWaking ? (
-        <div className="glass-card p-8 text-center">
-          <p className="text-red-400 text-sm">{error}</p>
-          <button onClick={loadProducts} className="btn-primary mt-4 mx-auto">Retry</button>
+        <div className="glass-card p-8 text-center space-y-4 max-w-lg mx-auto">
+          <div className="text-amber-400 text-2xl">⚠️</div>
+          <p className="text-red-400 text-sm font-medium">{error}</p>
+          <div className="bg-gray-900/80 p-3 rounded text-left text-xs font-mono space-y-1 border border-gray-800">
+            <p className="text-gray-400"><span className="text-gray-500">Configured API URL:</span> {import.meta.env.VITE_API_URL || '(Not set — using relative path)'}</p>
+          </div>
+          <button onClick={loadProducts} className="btn-primary text-xs py-2 px-4 mx-auto block">Retry Connection</button>
         </div>
       ) : products.length === 0 ? (
         <div className="glass-card p-12 text-center space-y-3">
