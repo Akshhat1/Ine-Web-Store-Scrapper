@@ -62,15 +62,15 @@ productsRouter.post("/", async (req, res) => {
       description: meta.description,
     });
 
-    // Trigger an immediate scrape in the background (don't await)
-    setImmediate(() => {
+    // Trigger an initial scrape in the background after 2 seconds
+    setTimeout(() => {
       scrapeSingleProduct(product, "manual").catch((err) => {
         logger.error("Background initial scrape failed", {
           productId: product.id,
           error: err instanceof Error ? err.message : String(err),
         });
       });
-    });
+    }, 2000);
 
     res.status(201).json({ product });
   } catch (err: unknown) {

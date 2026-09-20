@@ -26,8 +26,8 @@ import {
 import { scrapeProductPrice, type ScrapeOutcome } from "./browser.js";
 import { isPriceJump } from "./parse.js";
 
-// Small delay between products to be a polite scraper
-const BETWEEN_PRODUCT_DELAY_MS = 2000;
+// Delay between products to avoid triggering store API rate limits
+const BETWEEN_PRODUCT_DELAY_MS = 4500;
 
 // How long an "active" run must be before we consider it stale/overlapping
 const OVERLAP_GUARD_MS = 10 * 60 * 1000; // 10 minutes

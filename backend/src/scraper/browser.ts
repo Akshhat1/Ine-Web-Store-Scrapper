@@ -421,6 +421,22 @@ export async function scrapeProductPrice(
       throw new HttpError(httpStatus, `Server error ${httpStatus} on ${url}`);
     }
 
+    // ── Check if store SPA failed to load product (e.g. 429 rate limit) ─────────
+    const initialBody = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    if (
+      initialBody.includes("Couldn’t load this product") ||
+      initialBody.includes("Couldn't load this product") ||
+      initialBody.includes("Error: product")
+    ) {
+      const match = initialBody.match(/Error: product (\d+)/);
+      const errCode = match ? parseInt(match[1], 10) : 429;
+      logger.warn(`Store SPA rendered product load error ${errCode}`, {
+        productId,
+        bodyPreview: initialBody.slice(0, 150),
+      });
+      throw new HttpError(errCode, `Store SPA product load error ${errCode}`);
+    }
+
     // ── Wait for React SPA to hydrate — price block must appear ──────────────
     // The store is a Vite+React SPA; we need to wait for JS to execute and
     // render the product page including the price widget.
@@ -428,13 +444,23 @@ export async function scrapeProductPrice(
     try {
       await page.waitForSelector(".price-block", {
         state: "attached",
-        timeout: 20000,
+        timeout: 15000,
       });
       logger.info("Price block found in DOM");
     } catch {
-      // Price block still not visible — check if there's any content at all
+      // Check if page displays error text now
       const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
-      logger.warn("Price block not found within 20s", {
+      if (
+        bodyText.includes("Couldn’t load this product") ||
+        bodyText.includes("Couldn't load this product") ||
+        bodyText.includes("Error: product")
+      ) {
+        const match = bodyText.match(/Error: product (\d+)/);
+        const errCode = match ? parseInt(match[1], 10) : 429;
+        throw new HttpError(errCode, `Store SPA product load error ${errCode}`);
+      }
+
+      logger.warn("Price block not found within 15s", {
         bodyLength: bodyText.length,
         bodyPreview: bodyText.slice(0, 200),
       });
