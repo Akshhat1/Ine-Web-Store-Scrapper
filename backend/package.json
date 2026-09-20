@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "demo:headed": "node scripts/headed-demo.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
