@@ -2,8 +2,9 @@
   "name": "ine-price-tracker",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "npm run build --prefix frontend",
+    "build": "cd frontend && npm install && npm run build",
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
     "test": "cd backend && npm test",

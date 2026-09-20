@@ -5,7 +5,7 @@ services:
     region: singapore
     plan: free
     buildCommand: cd backend && npm install && npm run build
-    startCommand: node backend/dist/server.js
+    startCommand: cd backend && node dist/server.js
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
