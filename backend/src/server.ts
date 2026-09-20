@@ -61,8 +61,8 @@ app.get(["/health", "/api/health"], (_req, res) => {
 });
 
 // ── API routes ────────────────────────────────────────────────────────────────
-app.use("/api/store", storeRouter);
-app.use("/api/products", productsRouter);
+app.use(["/api/store", "/store"], storeRouter);
+app.use(["/api/products", "/products"], productsRouter);
 app.use("/api/cron", cronRouter);
 app.get("/api/runs", async (_req, res) => {
   // Convenience alias — forward to cron router

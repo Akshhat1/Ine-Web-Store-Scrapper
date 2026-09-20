@@ -1,11 +1,20 @@
 // frontend/src/lib/api.ts
 // Typed API client with sleeping-server retry logic.
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+function getFullUrl(path: string): string {
+  const rawBase = (import.meta.env.VITE_API_URL || '').trim();
+  if (!rawBase) return path;
+
+  let base = rawBase.replace(/\/+$/, '');
+  if (base.endsWith('/api') && path.startsWith('/api')) {
+    base = base.slice(0, -4);
+  }
+  return `${base}${path}`;
+}
 
 // Retry if backend returns 502/503/504 (Render sleeping)
 async function apiFetch(path: string, options?: RequestInit, retries = 3): Promise<Response> {
-  const url = `${API_URL}${path}`;
+  const url = getFullUrl(path);
   for (let i = 0; i < retries; i++) {
     try {
       const res = await fetch(url, {
