@@ -42,8 +42,21 @@ const limiter = rateLimitFn({
 });
 app.use("/api/store", limiter);
 
-// ── Health check (no DB, no auth, for keep-warm cron) ────────────────────────
-app.get("/health", (_req, res) => {
+// ── Root & Health check endpoints ─────────────────────────────────────────────
+app.get("/", (_req, res) => {
+  res.json({
+    status: "ok",
+    message: "INE Product Price Tracker API Service is running!",
+    endpoints: {
+      health: "/api/health",
+      products: "/api/products",
+      search: "/api/store/search?q={query}",
+      alerts: "/api/alerts"
+    }
+  });
+});
+
+app.get(["/health", "/api/health"], (_req, res) => {
   res.json({ status: "ok", ts: new Date().toISOString() });
 });
 

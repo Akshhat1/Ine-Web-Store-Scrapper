@@ -13,7 +13,7 @@ export function getSupabase(): SupabaseClient {
   _client = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY, {
     auth: { persistSession: false },
     realtime: {
-      transport: ws,
+      transport: ws as any,
     },
   });
   return _client;
