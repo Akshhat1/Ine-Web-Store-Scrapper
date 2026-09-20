@@ -129,6 +129,7 @@ export function clearLayoutCache(): void {
  * Simulate realistic human hover over the price area.
  * The store requires minMoves=8 over minDwellMs=600ms.
  * We use 14 moves over 900ms with small random offsets for realism.
+ * After hover, we click the "Reveal price" button if present & enabled.
  *
  * Returns true if hover succeeded.
  */
@@ -165,15 +166,25 @@ async function simulateHoverOnPriceBlock(
     for (let i = 0; i < moveCount; i++) {
       const progress = i / (moveCount - 1);
       // Lissajous-like path across the element for more natural movement
-      const dx = (Math.sin(progress * Math.PI * 2) * box.width * 0.35);
-      const dy = (Math.cos(progress * Math.PI * 1.5) * box.height * 0.35);
+      const dx = Math.sin(progress * Math.PI * 2) * box.width * 0.35;
+      const dy = Math.cos(progress * Math.PI * 1.5) * box.height * 0.35;
       await page.mouse.move(cx + dx, cy + dy, { steps: 2 });
       await page.waitForTimeout(delayPerMove + Math.random() * 30);
     }
 
     // Final hover on center
     await page.mouse.move(cx, cy);
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(150);
+
+    // Click the "Reveal price" button if present and enabled
+    const revealBtn = priceBlock.locator("button").first();
+    if (await revealBtn.isVisible().catch(() => false)) {
+      const isDisabled = await revealBtn.getAttribute("disabled").catch(() => null);
+      if (isDisabled === null) {
+        logger.info("Clicking Reveal Price button after hover");
+        await revealBtn.click().catch(() => {});
+      }
+    }
 
     return true;
   } catch (err) {
@@ -188,7 +199,7 @@ async function simulateHoverOnPriceBlock(
 
 /**
  * Polls the .price-block element until it has the 'price-success' class.
- * Also keeps simulating hover while in 'price-idle' or 'price-loading' state.
+ * Also keeps simulating hover / clicking button while in 'price-idle' or 'price-loading' state.
  *
  * Returns the inner text of the price block when success, or null on timeout.
  */
@@ -205,7 +216,7 @@ async function waitForPriceSuccess(
       const className = await priceBlock.getAttribute("class", { timeout: 3000 }).catch(() => null);
 
       if (!className) {
-        await page.waitForTimeout(400);
+        await page.waitForTimeout(500);
         continue;
       }
 
@@ -214,7 +225,7 @@ async function waitForPriceSuccess(
         const blockText = await priceBlock.innerText({ timeout: 3000 }).catch(() => "");
         // Also try to get just the price value span
         const priceValueEl = priceBlock.locator("[class*='pv-']").first();
-        const priceText = await priceValueEl.textContent({ timeout: 2000 }).catch(() => null) ?? blockText;
+        const priceText = (await priceValueEl.textContent({ timeout: 2000 }).catch(() => null)) ?? blockText;
         return { priceText: priceText.trim(), blockText: blockText.trim() };
       }
 
@@ -223,16 +234,30 @@ async function waitForPriceSuccess(
         return null;
       }
 
-      // If still idle/loading and we haven't re-simulated yet, do it again
-      if ((className.includes("price-idle") || className.includes("price-loading")) && !hoverResimulated) {
-        logger.info("Price still loading/idle, re-simulating hover");
-        await simulateHoverOnPriceBlock(page);
-        hoverResimulated = true;
+      // If in price-idle state, attempt to click Reveal button or re-simulate hover
+      if (className.includes("price-idle")) {
+        const revealBtn = priceBlock.locator("button").first();
+        if (await revealBtn.isVisible().catch(() => false)) {
+          const isDisabled = await revealBtn.getAttribute("disabled").catch(() => null);
+          if (isDisabled === null) {
+            logger.info("Clicking Reveal Price button in wait loop");
+            await revealBtn.click().catch(() => {});
+          }
+        }
+
+        if (!hoverResimulated) {
+          logger.info("Price still idle, re-simulating hover");
+          await simulateHoverOnPriceBlock(page);
+          hoverResimulated = true;
+        }
+      } else {
+        // In price-loading or price-retrying state: let SPA internal fetch/retry complete
+        logger.info("Price widget loading/retrying, waiting...", { className });
       }
 
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(500);
     } catch {
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(500);
     }
   }
 
@@ -331,7 +356,19 @@ export async function scrapeProductPrice(
   stabilityIntervalMs = 1000,
 ): Promise<ScrapeOutcome> {
   const env = getEnv();
-  const url = `${env.STORE_BASE_URL}/product/${productSlug}`;
+  
+  // Construct destination URL:
+  // The store React SPA uses numeric ID for routes: /product/:id (e.g. /product/301)
+  let url: string;
+  if (productSlug.startsWith("http://") || productSlug.startsWith("https://")) {
+    url = productSlug;
+  } else if (/^\d+$/.test(productSlug)) {
+    url = `${env.STORE_BASE_URL}/product/${productSlug}`;
+  } else if (/^\d+$/.test(productId)) {
+    url = `${env.STORE_BASE_URL}/product/${productId}`;
+  } else {
+    url = `${env.STORE_BASE_URL}/product/${productSlug}`;
+  }
 
   if (!env.ENABLE_BROWSER) {
     return {
@@ -368,7 +405,7 @@ export async function scrapeProductPrice(
     logger.info(`Navigating to ${url}`, { productId, productSlug });
 
     const navResponse = await page.goto(url, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",
       timeout: env.SCRAPE_TIMEOUT_MS,
     });
 
@@ -384,15 +421,30 @@ export async function scrapeProductPrice(
       throw new HttpError(httpStatus, `Server error ${httpStatus} on ${url}`);
     }
 
-    // ── Wait for React to hydrate (look for the product title or price block) ──
-    await page.waitForSelector(".price-block, [class*='price-block']", {
-      timeout: 15000,
-    }).catch(() => {
-      logger.warn("Price block not found within 15s, continuing anyway");
-    });
+    // ── Wait for React SPA to hydrate — price block must appear ──────────────
+    // The store is a Vite+React SPA; we need to wait for JS to execute and
+    // render the product page including the price widget.
+    logger.info("Waiting for React SPA to hydrate price block...");
+    try {
+      await page.waitForSelector(".price-block", {
+        state: "attached",
+        timeout: 20000,
+      });
+      logger.info("Price block found in DOM");
+    } catch {
+      // Price block still not visible — check if there's any content at all
+      const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+      logger.warn("Price block not found within 20s", {
+        bodyLength: bodyText.length,
+        bodyPreview: bodyText.slice(0, 200),
+      });
+      // Try scrolling to trigger lazy rendering
+      await page.evaluate(() => (globalThis as any).scrollTo(0, 300));
+      await page.waitForTimeout(2000);
+    }
 
-    // Small wait for JS to fully load
-    await page.waitForTimeout(800);
+    // Extra stability wait for any lazy-loaded JS
+    await page.waitForTimeout(1000);
 
     // ── Fetch layout for current CSS class names (via HTTP, not browser) ──
     const layout = await fetchLayout(env.STORE_BASE_URL);
@@ -407,8 +459,8 @@ export async function scrapeProductPrice(
     logger.info(`Simulating hover to unlock price widget`, { productId });
     await simulateHoverOnPriceBlock(page);
 
-    // ── Wait for price-success (up to 25s) ────────────────────────────────
-    const PRICE_WAIT_MS = 25000;
+    // ── Wait for price-success (up to 35s to allow store client retries) ────
+    const PRICE_WAIT_MS = 35000;
     logger.info(`Waiting for price-success state`, { productId, timeoutMs: PRICE_WAIT_MS });
     const priceData = await waitForPriceSuccess(page, PRICE_WAIT_MS);
 

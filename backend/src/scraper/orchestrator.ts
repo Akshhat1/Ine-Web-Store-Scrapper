@@ -62,8 +62,9 @@ async function scrapeOneProduct(
 
     const outcome = await scrapeProductPrice(
       product.store_product_id,
-      // Derive slug from URL: /product/<slug>
-      product.url.split("/product/")[1] ?? product.store_product_id,
+      // IMPORTANT: The INE demo store SPA uses /product/:id (numeric ID), NOT slugs.
+      // store_product_id is the numeric ID (e.g. "301"), so use it directly.
+      product.store_product_id,
       product.last_price,
     );
 
@@ -93,7 +94,7 @@ async function scrapeOneProduct(
         // One extra fetch to confirm
         const verify = await scrapeProductPrice(
           product.store_product_id,
-          product.url.split("/product/")[1] ?? product.store_product_id,
+          product.store_product_id, // Numeric ID for the store SPA URL
           product.last_price,
         );
         if (verify.ok) {
