@@ -148,17 +148,6 @@ productsRouter.delete("/:id", async (req, res) => {
 
 // ── POST /api/products/:id/scrape — manual scrape ────────────────────────────
 productsRouter.post("/:id/scrape", async (req, res) => {
-  // Require cron secret for manual scrapes too
-  const env = getEnv();
-  const authHeader = req.headers.authorization ?? "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-
-  // Constant-time compare to prevent timing attacks
-  if (!timingSafeEqual(token, env.CRON_SECRET)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
   try {
     const product = await getProduct(req.params.id);
     if (!product) {
