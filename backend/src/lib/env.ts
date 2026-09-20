@@ -14,9 +14,8 @@ const envSchema = z.object({
   CRON_SECRET: z.string().min(8),
   FRONTEND_ORIGIN: z.string().default("*"),
   ENABLE_BROWSER: z
-    .string()
-    .transform((v) => v === "true" || v === "1")
-    .default("true"),
+    .any()
+    .transform(() => true),
   SCRAPE_TIMEOUT_MS: z.coerce.number().default(30000),
   MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
   PRICE_JUMP_THRESHOLD: z.coerce.number().default(0.5),
