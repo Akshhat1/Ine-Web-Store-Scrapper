@@ -32,31 +32,38 @@ async function apiFetch(path: string, options?: RequestInit, retries = 3): Promi
   throw new Error('Server unavailable after retries');
 }
 
+async function parseResponse<T>(res: Response): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  const isHtml = contentType.includes('text/html');
+
+  if (!res.ok) {
+    if (isHtml) {
+      throw new Error('Backend URL (VITE_API_URL) returned HTML. Please verify your Render URL in Vercel environment variables.');
+    }
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+
+  if (isHtml) {
+    throw new Error('VITE_API_URL is missing or pointing to frontend SPA. Please set VITE_API_URL to your Render backend URL in Vercel.');
+  }
+
+  return res.json() as Promise<T>;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error((body as {error?: string}).error ?? `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
+  return parseResponse<T>(res);
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await apiFetch(path, { method: 'POST', body: JSON.stringify(body) });
-  if (!res.ok) {
-    const b = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error((b as {error?: string}).error ?? `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
+  return parseResponse<T>(res);
 }
 
 async function del<T>(path: string): Promise<T> {
   const res = await apiFetch(path, { method: 'DELETE' });
-  if (!res.ok) {
-    const b = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error((b as {error?: string}).error ?? `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
+  return parseResponse<T>(res);
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
