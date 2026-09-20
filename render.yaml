@@ -4,7 +4,7 @@ services:
     runtime: node
     region: singapore
     plan: free
-    buildCommand: cd backend && npm install --include=dev && npm run build
+    buildCommand: cd backend && npm install --include=dev && npx playwright install --with-deps chromium && npm run build
     startCommand: cd backend && node dist/server.js
     healthCheckPath: /health
     envVars:
@@ -21,7 +21,7 @@ services:
       - key: FRONTEND_ORIGIN
         sync: false
       - key: ENABLE_BROWSER
-        value: false
+        value: "true"
       - key: STORE_BASE_URL
         value: https://demo.inelabteamdev.com
       - key: SCRAPE_TIMEOUT_MS

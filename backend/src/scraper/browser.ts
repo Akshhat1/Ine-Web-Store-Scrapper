@@ -46,7 +46,11 @@ async function getBrowser(headless = true, slowMo = 0): Promise<import("playwrig
   const { chromium } = await import("playwright");
   logger.info("Launching Playwright Chromium browser", { headless, slowMo });
 
-  _browser = await chromium.launch({ headless, slowMo });
+  _browser = await chromium.launch({
+    headless,
+    slowMo,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
   return _browser;
 }
 
